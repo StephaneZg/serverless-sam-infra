@@ -1,0 +1,35 @@
+# More information about the configuration file can be found here:
+# https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-config.html
+version = 0.1
+
+[default.global.parameters]
+stack_name = "sam-cloud-infra"
+parameter_overrides = "DomainName=items.zabens.com HostedZoneId=Z061049132SX64QR353IE RootDomainName=zabens.com"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.validate.parameters]
+lint = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+s3_bucket = "sam-cloud-infra-sourcebucket"
+s3_prefix = "sam-cloud-infra"
+region = "us-east-1"
+parameter_overrides = "DomainName=\"items.zabens.com\" HostedZoneId=\"Z061049132SX64QR353IE\" DistributionPriceClass=\"PriceClass_200\""
+image_repositories = []
+resolve_s3 = false
+
+[default.sync.parameters]
+watch = true
+
+[default.local_start_api.parameters]
+warm_containers = "EAGER"
+
+[default.local_start_lambda.parameters]
+warm_containers = "EAGER"
+
+

@@ -1,0 +1,383 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  sam-cloud-infra
+  sam-cloud-infra used to deployed a fully serverless application with AWS SAM
+
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: "Domain name"
+    AllowedPattern: "^[a-zA-Z0-9.-]+$"
+    ConstraintDescription: "Must be a valid domain name."
+  RootDomainName:
+    Type: String
+    Description: "Root domain name"
+  DistributionPriceClass:
+    Type: String
+    Description: "Price class for the CloudFront distribution"
+    Default: PriceClass_200
+    AllowedValues:
+      - PriceClass_100
+      - PriceClass_200
+
+Mappings:
+  AWSRegionMap:
+    us-east-1:
+      HostedZoneId: Z2FDTNDATAQYW2 # This value is the same for all regions
+                                     # Just wanted to not hard code it in the record set
+
+Globals:
+  Function:
+    Timeout: 20
+    MemorySize: 128
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref DynamoDBTable
+
+Resources:
+  GetAllItemsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - GetAllItemsLogGroup
+    Properties:
+      Description: "Simple function to get all items from a DynamoDB table"
+      CodeUri: functions/get-all-items/
+      Handler: app.getAllItemsHandler
+      Runtime: nodejs20.x
+      Architectures:
+        - x86_64
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DynamoDBTable
+      LoggingConfig:
+        LogGroup: !Sub "/aws/lambda/${AWS::StackName}-GetAllItemsFunction"
+      Events:
+        GetAllItemsApiEvent:
+          Type: Api
+          Properties:
+            Path: /items
+            Method: get
+            RestApiId:
+              Ref: ItemsApi
+      Tags:
+        Name: !Sub "${AWS::StackName}-GetAllItemsFunction"
+
+  GetItemsByEmailFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - GetItemsByEmailLogGroup
+    Properties:
+      Description: "Simple function to get items by email from a DynamoDB table"
+      CodeUri: functions/get-items-by-email/
+      Handler: app.getItemsByEmailHandler
+      Runtime: nodejs20.x
+      Architectures:
+        - x86_64
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DynamoDBTable
+      LoggingConfig:
+        LogGroup: !Sub "/aws/lambda/${AWS::StackName}-GetItemsByEmailFunction"
+      Events:
+        GetItemsByEmailApiEvent:
+          Type: Api
+          Properties:
+            Path: /items/{email}
+            Method: get
+            RestApiId:
+              Ref: ItemsApi
+      Tags:
+        Name: !Sub "${AWS::StackName}-GetItemsByEmailFunction"
+
+  PutItemFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - PutItemLogGroup
+    Properties:
+      Description: "Simple function to put an item into a DynamoDB table"
+      CodeUri: functions/put-items/
+      Handler: app.putItemHandler
+      Runtime: nodejs20.x
+      Architectures:
+        - x86_64
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DynamoDBTable
+      LoggingConfig:
+        LogGroup: !Sub "/aws/lambda/${AWS::StackName}-PutItemFunction"
+      Events:
+        PutItemApiEvent:
+          Type: Api
+          Properties:
+            Path: /items
+            Method: post
+            RestApiId:
+              Ref: ItemsApi
+      Tags:
+        Name: !Sub "${AWS::StackName}-PutItemFunction"
+
+  GetAllItemsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-GetAllItemsFunction"
+      RetentionInDays: 3
+
+  GetItemsByEmailLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-GetItemsByEmailFunction"
+      RetentionInDays: 3
+
+  PutItemLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-PutItemFunction"
+      RetentionInDays: 3
+
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ItemsTable
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 2
+        WriteCapacityUnits: 2
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ItemsTable"
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-UserPool"
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: false
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      UsernameConfiguration:
+        CaseSensitive: true
+      UserPoolTags:
+        Name: !Sub "${AWS::StackName}-UserPool"
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      ClientName: !Sub "${AWS::StackName}-UserPoolClient"
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: True
+      CallbackURLs:
+        - !Sub "https://${DomainName}"
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+      AllowedOAuthFlows:
+        - implicit
+      SupportedIdentityProviders:
+        - COGNITO
+
+  ItemsApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Description: "API for managing items"
+      Name: "ItemsApi"
+      StageName: prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: !Ref DomainName
+      Auth:
+        DefaultAuthorizer: CloudInfraCognitoAuthorizer
+        Authorizers:
+          CloudInfraCognitoAuthorizer:
+            AuthorizationScopes:
+              - email
+              - openid
+              - phone
+            UserPoolArn: !GetAtt CognitoUserPool.Arn
+            Identity:
+              Header: "Authorization"
+              ValidationExpression: "^Bearer [^\\s]+$"
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
+        Format: '$context.identity.sourceIp - - [$context.requestTime] "$context.httpMethod $context.resourcePath $context.protocol" $context.status $context.responseLength $context.requestId'
+      Tags:
+        Name: !Sub "${AWS::StackName}-ItemsApi"
+
+
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref RootDomainName
+
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/api-gateway/${AWS::StackName}"
+      RetentionInDays: 3
+
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "OAI for ${DomainName}"
+
+  StaticWebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref DomainName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: notfound.html
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-StaticWebsiteBucket"
+
+  StaticWebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticWebsiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontAccess
+            Effect: Allow
+            Action:
+              - "s3:GetObject"
+            Resource: !Sub "arn:aws:s3:::${StaticWebsiteBucket}/*"
+            Principal:
+              AWS: !Sub "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${CloudFrontOriginAccessIdentity}"
+
+  DomainCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      SubjectAlternativeNames:
+        - !Ref DomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !GetAtt HostedZone.Id
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-WebCertificate"
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - !Ref DomainName
+        DefaultRootObject: index.html
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          DefaultTTL: 86400
+          ForwardedValues:
+            Cookies:
+              Forward: none
+            QueryString: false
+          TargetOriginId: !Sub "${AWS::StackName}-StaticWebsiteBucketOrigin"
+          ViewerProtocolPolicy: redirect-to-https
+        Enabled: true
+        HttpVersion: http2
+        Origins:
+          - DomainName: !GetAtt StaticWebsiteBucket.RegionalDomainName
+            Id: !Sub "${AWS::StackName}-StaticWebsiteBucketOrigin"
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}"
+        PriceClass: !Ref DistributionPriceClass
+        ViewerCertificate:
+          AcmCertificateArn: !Ref DomainCertificate
+          SslSupportMethod: sni-only
+
+  # For the DNS records, we need to create an A and an AAAA record for the domain
+  # As specification stated in the documentation : https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-recordset-aliastarget.html
+  DNSRecordSet:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      Comment: !Sub 'DNS records for ${DomainName}'
+      HostedZoneId: !GetAtt HostedZone.Id
+      RecordSets:
+        - Name: !Ref DomainName
+          Type: A
+          AliasTarget:
+            DNSName: !GetAtt CloudFrontDistribution.DomainName
+            EvaluateTargetHealth: false
+            HostedZoneId: !FindInMap [AWSRegionMap, !Ref "AWS::Region", HostedZoneId] # Enforced this to used map, but hard coding it also works
+        - Name: !Ref DomainName
+          Type: AAAA
+          AliasTarget:
+            DNSName: !GetAtt CloudFrontDistribution.DomainName
+            EvaluateTargetHealth: false
+            HostedZoneId: !FindInMap [AWSRegionMap, !Ref "AWS::Region", HostedZoneId]
+
+  ApplicationResourceGroup:
+    Type: AWS::ResourceGroups::Group
+    Properties:
+      Name: !Sub "${AWS::StackName}-ApplicationInsights-RG"
+      Description: "Resource group for the application stack insights"
+      ResourceQuery:
+        Type: CLOUDFORMATION_STACK_1_0
+
+
+  ApplicationInsightsMonitoring:
+    Type: AWS::ApplicationInsights::Application
+    Properties:
+      ResourceGroupName: !Ref ApplicationResourceGroup
+      AutoConfigurationEnabled: true
+
+Outputs:
+  ItemsApi:
+    Description: "Base API Gateway endpoint URL for Prod stage of Items API"
+    Value: !Sub "https://${ItemsApi}.execute-api.${AWS::Region}.amazonaws.com/prod/"
+  GetAllItemsFunction:
+    Description: "GetAllItems Lambda Function ARN"
+    Value: !GetAtt GetAllItemsFunction.Arn
+  GetItemsByEmailFunction:
+    Description: "GetItemsByEmail Lambda Function ARN"
+    Value: !GetAtt GetItemsByEmailFunction.Arn
+  PutItemFunction:
+    Description: "PutItem Lambda Function ARN"
+    Value: !GetAtt PutItemFunction.Arn
+  UserPoolId:
+    Description: "User Pool ID"
+    Value: !Ref CognitoUserPool
+  UserPoolClient:
+    Description: "User Pool Client ID"
+    Value: !Ref CognitoUserPoolClient
