@@ -205,5 +205,9 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+#IDE
+.idea
+.vscode
+
 # End of https://www.toptal.com/developers/gitignore/api/osx,node,linux,windows,sam
 !/.github/workflows/
